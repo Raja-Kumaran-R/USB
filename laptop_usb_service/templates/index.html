@@ -150,6 +150,31 @@
     #emulationBanner { display:none; background:#2a2100; color:#ffd966; border:1px solid #806000; border-radius:8px; padding:10px 14px; margin-bottom:12px; }
     .emulation-progress-wrap { display:none; margin-top:12px; }
     .progress { background-color:#333; height:22px; }
+  
+    /* Clear-space modal styles */
+    .cache-item-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #252525;
+      color: #fff;
+      padding: 12px;
+      margin-bottom: 8px;
+      border-radius: 8px;
+      border: 1px solid #444;
+    }
+    .cache-item-name { font-weight: 700; word-break: break-word; }
+    .cache-item-meta { color: #d6d6d6; font-size: 13px; }
+    .cache-delete-btn {
+      background: #dc3545;
+      color: #fff;
+      border: none;
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      min-width: 90px;
+    }
+    .cache-delete-btn:hover { background: #bb2d3b; }
   </style>
 </head>
 <body>
@@ -232,10 +257,35 @@
         </div>
       </div>
       <div class="modal-footer">
+        <button class="btn btn-warning" id="clearSpaceBtn" onclick="openClearSpaceModal()">
+          <i class="bi bi-trash3"></i> Clear Space in Rutomatrix
+        </button>
         <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
         <button class="btn btn-primary" id="confirmEmulateBtn" onclick="confirmEmulation()">
           <i class="bi bi-usb-drive"></i> Download & Emulate
         </button>
+      </div>
+    </div></div>
+  </div>
+
+
+
+  <!-- Clear Space Modal -->
+  <div class="modal fade" id="clearSpaceModal" tabindex="-1">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Rutomatrix Stored Files</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="rutomatrixStorageInfo" class="mb-3" style="color:#d6d6d6;">Loading storage details...</div>
+        <div id="rutomatrixCacheList" style="max-height:420px; overflow-y:auto;">Loading...</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="loadRutomatrixCache()">
+          <i class="bi bi-arrow-clockwise"></i> Back / Refresh
+        </button>
+        <button class="btn btn-danger" data-bs-dismiss="modal">Close</button>
       </div>
     </div></div>
   </div>
@@ -558,8 +608,6 @@
 
     async function prepareEmulation(name, isFolder) {
       const bridge = getBridgeBase();
-      await refreshEmulationState();
-      if (emulationActive) { alert('A file/folder is already emulated. Revert it before emulating a new item.'); return; }
       if (!bridge) {
         openBridgeModal();
         return;
@@ -625,7 +673,6 @@
 
     async function revertEmulation() {
       const bridge = getBridgeBase();
-      await refreshEmulationState();
       if (!bridge) {
         openBridgeModal();
         return;
@@ -641,6 +688,91 @@
         alert(e.message);
       }
     }
+
+
+    async function openClearSpaceModal() {
+      const bridge = getBridgeBase();
+      if (!bridge) {
+        openBridgeModal();
+        return;
+      }
+      new bootstrap.Modal('#clearSpaceModal').show();
+      await loadRutomatrixCache();
+    }
+
+    async function loadRutomatrixCache() {
+      const bridge = getBridgeBase();
+      const listDiv = document.getElementById('rutomatrixCacheList');
+      const infoDiv = document.getElementById('rutomatrixStorageInfo');
+
+      if (!bridge) {
+        listDiv.innerHTML = '<div class="alert alert-danger">Bridge IP not configured.</div>';
+        return;
+      }
+
+      listDiv.innerHTML = '<div style="color:#d6d6d6;">Loading stored files...</div>';
+      infoDiv.innerHTML = '<div style="color:#d6d6d6;">Loading storage details...</div>';
+
+      try {
+        const r = await fetch(bridge + '/emulation/cache-list');
+        const data = await r.json();
+        if (!r.ok || !data.success) throw new Error(data.error || 'Failed to load Rutomatrix storage.');
+
+        if (data.storage && data.storage.length > 0) {
+          infoDiv.innerHTML = data.storage.map(s =>
+            `<div><b>${s.label}</b> — Available: ${s.free}</div>`
+          ).join('');
+        } else {
+          infoDiv.innerHTML = '<div>No storage information available.</div>';
+        }
+
+        if (!data.items || data.items.length === 0) {
+          listDiv.innerHTML = '<div class="alert alert-info">No stored emulation files found.</div>';
+          return;
+        }
+
+        listDiv.innerHTML = data.items.map(item => {
+          const icon = item.type === 'folder' ? '📁' : '📄';
+          const safeName = String(item.name).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const jsName = String(item.name).replace(/\/g, '\\').replace(/'/g, "\'");
+          return `
+            <div class="cache-item-row">
+              <div style="min-width:0; padding-right:12px;">
+                <div class="cache-item-name">${icon} ${safeName}</div>
+                <div class="cache-item-meta">Size: ${item.size}</div>
+              </div>
+              <button class="cache-delete-btn" onclick="deleteRutomatrixCacheItem('${jsName}')">Delete</button>
+            </div>`;
+        }).join('');
+
+      } catch (e) {
+        listDiv.innerHTML = `<div class="alert alert-danger">${e.message}</div>`;
+      }
+    }
+
+    async function deleteRutomatrixCacheItem(name) {
+      const bridge = getBridgeBase();
+      if (!bridge) {
+        openBridgeModal();
+        return;
+      }
+
+      if (!confirm(`Delete "${name}" from Rutomatrix storage?`)) return;
+
+      try {
+        const r = await fetch(bridge + '/emulation/cache-delete', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ name })
+        });
+        const data = await r.json();
+        if (!r.ok || !data.success) throw new Error(data.error || 'Delete failed.');
+        await loadRutomatrixCache();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
 
     load();
     setInterval(refreshEmulationState, 5000);
