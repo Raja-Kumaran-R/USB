@@ -626,7 +626,6 @@
     async function revertEmulation() {
       const bridge = getBridgeBase();
       await refreshEmulationState();
-      if (emulationActive) { alert('A file/folder is already emulated. Revert it before emulating a new item.'); return; }
       if (!bridge) {
         openBridgeModal();
         return;
