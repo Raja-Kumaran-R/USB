@@ -734,7 +734,7 @@
         listDiv.innerHTML = data.items.map(item => {
           const icon = item.type === 'folder' ? '📁' : '📄';
           const safeName = String(item.name).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-          const jsName = String(item.name).replace(/\/g, '\\').replace(/'/g, "\'");
+          const jsName = String(item.name).replace(/\\/g, '\\\\').replace(/'/g, "\'");
           return `
             <div class="cache-item-row">
               <div style="min-width:0; padding-right:12px;">
