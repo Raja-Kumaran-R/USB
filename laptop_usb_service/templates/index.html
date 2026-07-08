@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>USB File Sharing</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+  <style>
+    :root {
+      --primary: #ff6a00;
+      --primary-hover: #e05d00;
+      --secondary: #0971b3;
+      --secondary-hover: #08619d;
+      --bg-dark: #000000;
+      --bg-light: #1a1a1a;
+      --bg-lighter: #2a2a2a;
+      --text-light: #ffffff;
+      --text-muted: #aaaaaa;
+    }
+    
+    body { 
+      background: #121212; 
+      color: var(--text-light);
+      min-height: 100vh;
+    }
+    
+    /* Updated table styles */
+    .table thead th {
+      background-color: #2a2a2a;
+      color: #fff;
+      border-bottom: 1px solid #444;
+    }
+    
+    .table tbody tr {
+      background-color: #2a2a2a;
+      color: #fff;
+    }
+    
+    .table tbody tr:hover {
+      background-color: #333333;
+    }
+    
+    .folder-link { 
+      cursor: pointer; 
+      color: var(--primary);
+    }
+    
+    .folder-link:hover { 
+      text-decoration: underline;
+      color: var(--primary-hover);
+    }
+    
+    .modal-body textarea { 
+      height: 300px; 
+      font-family: monospace;
+      background-color: var(--bg-lighter);
+      color: var(--text-light);
+    }
+    
+    .breadcrumb {
+      background-color: var(--bg-light);
+      padding: 0.75rem 1rem;
+      border-radius: 0.5rem;
+    }
+    
+    .breadcrumb-item a {
+      color: var(--primary);
+    }
+    
+    .breadcrumb-item.active {
+      color: var(--text-light);
+    }
+    
+    .form-control {
+      background-color: var(--bg-lighter);
+      color: var(--text-light);
+      border-color: #444444;
+    }
+    
+    .form-control:focus {
+      background-color: var(--bg-lighter);
+      color: var(--text-light);
+      border-color: var(--primary);
+      box-shadow: 0 0 0 0.25rem rgba(255, 106, 0, 0.25);
+    }
+    
+    .modal-content {
+      background-color: var(--bg-light);
+      color: var(--text-light);
+    }
+    
+    .btn-close {
+      filter: invert(1);
+    }
+    
+    .btn-primary {
+      background-color: var(--primary);
+      border-color: var(--primary);
+    }
+    
+    .btn-primary:hover {
+      background-color: var(--primary-hover);
+      border-color: var(--primary-hover);
+    }
+    
+    .btn-secondary {
+      background-color: var(--secondary);
+      border-color: var(--secondary);
+    }
+    
+    .btn-secondary:hover {
+      background-color: var(--secondary-hover);
+      border-color: var(--secondary-hover);
+    }
+    
+    .container {
+      max-width: 1200px;
+    }
+    
+    .file-icon {
+      margin-right: 8px;
+      font-size: 1.2rem;
+    }
+    
+    .action-buttons {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    
+    .file-item {
+      display: flex;
+      align-items: center;
+    }
+    
+    .table tbody td {
+    background-color: #2a2a2a;
+    color: #fff;
+  }
+
+  .table tbody tr:hover td {
+   background-color: #333333;
+  }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav aria-label="breadcrumb"><ol class="breadcrumb" id="breadcrumb"></ol></nav>
+    <div class="d-flex mb-3 gap-2 flex-wrap">
+      <input type="file" id="fileUpload" class="form-control w-auto d-none">
+      <button class="btn btn-primary" onclick="document.getElementById('fileUpload').click()">
+        <i class="bi bi-upload"></i> Upload
+      </button>
+      <button class="btn btn-secondary" onclick="goUp()">
+        <i class="bi bi-arrow-up"></i> Up
+      </button>
+      <input type="text" id="newFolderName" placeholder="Folder name" class="form-control w-auto">
+      <button class="btn btn-success" onclick="mkdir()">
+        <i class="bi bi-folder-plus"></i> New Folder
+      </button>
+      <input type="text" id="newFileName" placeholder="File name" class="form-control w-auto">
+      <button class="btn btn-info" onclick="touch()">
+        <i class="bi bi-file-earmark-plus"></i> New File
+      </button>
+      <button class="btn btn-outline-warning" onclick="revertEmulation()">
+        <i class="bi bi-usb-drive"></i> Revert Emulation
+      </button>
+      <button class="btn btn-outline-secondary" onclick="openBridgeModal()">
+        <i class="bi bi-hdd-network"></i> Bridge IP
+      </button>
+    </div>
+    <table class="table table-hover">        
+      <thead>
+        <tr>
+          <th><i class="bi bi-folder-fill"></i> Name</th>
+          <th style="width:360px"><i class="bi bi-gear-fill"></i> Actions</th>
+        </tr>
+      </thead>
+      <tbody id="fileList"></tbody>
+    </table>
+  </div>
+
+  <!-- Edit Modal -->
+  <div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Edit File: <span id="editName"></h5></span>
+        <button type="button" class="btn-close" onclick="closeEditModal()"></button>
+      </div>
+      <div class="modal-body">
+        <textarea id="editArea" class="form-control" spellcheck="false"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeEditModal()">
+          <i class="bi bi-x-circle"></i> Cancel
+        </button>
+        <button class="btn btn-primary" onclick="saveEdit()">
+          <i class="bi bi-save"></i> Save
+        </button>
+      </div>
+    </div></div>
+  </div>
+
+
+
+  <!-- Storage Selection Modal -->
+  <div class="modal fade" id="storageModal" tabindex="-1">
+    <div class="modal-dialog"><div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Emulate Selected Item</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="emulateItemSummary" class="mb-3 text-muted"></div>
+        <div class="mb-2">Choose where to store the downloaded copy before USB emulation:</div>
+        <div id="storageOptions"></div>
+        <div id="emulateStatus" class="mt-3 small text-muted"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" id="confirmEmulateBtn" onclick="confirmEmulation()">
+          <i class="bi bi-usb-drive"></i> Download & Emulate
+        </button>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- Bridge IP Modal -->
+  <div class="modal fade" id="bridgeModal" tabindex="-1">
+    <div class="modal-dialog"><div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Rutomatrix Bridge Settings</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Bridge IP Address</label>
+        <input type="text" id="bridgeIpInput" class="form-control" placeholder="Example: 10.208.50.20">
+        <div class="form-text text-muted mt-2">This is used only to trigger USB emulation from Rutomatrix.</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="saveBridgeIp()">Save</button>
+      </div>
+    </div></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    let cwd = "", editPath = "";
+    const API_BASE = window.location.origin;
+    let pendingEmulation = null;
+
+    function getBridgeBase() {
+      const savedIp = localStorage.getItem('rutomatrixBridgeIp') || '';
+      if (!savedIp) return '';
+      return `http://${savedIp}:8091`;
+    }
+
+    function getBridgeIp() {
+      return localStorage.getItem('rutomatrixBridgeIp') || '';
+    }
+
+    function openBridgeModal() {
+      document.getElementById('bridgeIpInput').value = getBridgeIp();
+      new bootstrap.Modal('#bridgeModal').show();
+    }
+
+    function saveBridgeIp() {
+      const ip = document.getElementById('bridgeIpInput').value.trim();
+      if (!ip) return alert('Enter Bridge IP address');
+      localStorage.setItem('rutomatrixBridgeIp', ip);
+      bootstrap.Modal.getInstance(document.getElementById('bridgeModal'))?.hide();
+      alert('Bridge IP saved.');
+    }
+
+    function humanSize(bytes) {
+      let n = Number(bytes || 0);
+      const units = ['B','KB','MB','GB','TB'];
+      let i = 0;
+      while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+      return i === 0 ? `${n} ${units[i]}` : `${n.toFixed(1)} ${units[i]}`;
+    }
+
+    function setBreadcrumb() {
+      const bc = document.getElementById("breadcrumb");
+      bc.innerHTML = '';
+      const parts = cwd.split("/").filter(x => x);
+      bc.innerHTML = `<li class="breadcrumb-item"><a href="#" onclick="cd('')"><i class="bi bi-usb-drive"></i> USB</a></li>`;
+      let acc = "";
+      parts.forEach((p, i) => {
+        acc += (i > 0 ? '/' : '') + p;
+        bc.innerHTML += `
+          <li class="breadcrumb-item${i===parts.length-1?' active':''}"${i===parts.length-1?' aria-current="page"':''}>
+            ${i===parts.length-1?p:`<a href="#" onclick="cd('${acc}')"><i class="bi bi-folder"></i> ${p}</a>`}
+          </li>`;
+      });
+    }
+
+    function getFileIcon(name, isFolder) {
+      if (isFolder) return '<i class="bi bi-folder-fill text-warning file-icon"></i>';
+      
+      const ext = name.split('.').pop().toLowerCase();
+      const icons = {
+        txt: 'file-text',
+        md: 'file-text',
+        pdf: 'file-pdf',
+        doc: 'file-word',
+        docx: 'file-word',
+        xls: 'file-excel',
+        xlsx: 'file-excel',
+        ppt: 'file-ppt',
+        pptx: 'file-ppt',
+        jpg: 'file-image',
+        jpeg: 'file-image',
+        png: 'file-image',
+        gif: 'file-image',
+        mp3: 'file-music',
+        mp4: 'file-play',
+        zip: 'file-zip',
+        exe: 'file-binary',
+        py: 'file-code',
+        js: 'file-code',
+        html: 'file-code',
+        css: 'file-code'
+      };
+      
+      return `<i class="bi bi-${icons[ext] || 'file-earmark'} text-info file-icon"></i>`;
+    }
+
+    async function load() {
+      setBreadcrumb();
+      const r = await fetch(API_BASE + '/list?path=' + encodeURIComponent(cwd));
+      if (!r.ok) return alert("USB not ready.");
+      const files = await r.json();
+      const tb = document.getElementById("fileList");
+      tb.innerHTML = "";
+      files.sort((a,b) => a.is_folder === b.is_folder ? a.name.localeCompare(b.name) : a.is_folder ? -1 : 1);
+      files.forEach(f => {
+        const tr = document.createElement("tr");
+        const nameTd = document.createElement("td");
+        nameTd.innerHTML = f.is_folder
+            ? `<div class="file-item">
+                    <span class="folder-link" onclick="cd('${f.name}')">
+                    ${getFileIcon(f.name, true)} ${f.name}
+                    </span>
+                </div>`
+            : `<div class="file-item">
+                    ${getFileIcon(f.name, false)} ${f.name}
+                </div>`;
+        
+        const actionsTd = document.createElement("td");
+        actionsTd.innerHTML = `
+          <div class="action-buttons">
+            ${!f.is_folder ? `<button class="btn btn-sm btn-success" onclick="download('${f.name}')" title="Download"><i class="bi bi-download"></i></button>` : ''}
+            <button class="btn btn-sm btn-primary" onclick="prepareEmulation('${f.name}',${f.is_folder})" title="Emulate to Target"><i class="bi bi-usb-symbol"></i></button>
+            ${!f.is_folder && /\.(txt|md|log|py|js|html|css)$/i.test(f.name) ? `<button class="btn btn-sm btn-warning" onclick="openEditModal('${f.name}')" title="Edit"><i class="bi bi-pencil"></i></button>` : ''}
+            <button class="btn btn-sm btn-danger" onclick="rm('${f.name}',${f.is_folder})" title="Delete"><i class="bi bi-trash"></i></button>
+          </div>`;
+        
+        tr.append(nameTd, actionsTd);
+        tb.append(tr);
+      });
+    }
+
+    function cd(path) { cwd = path; load(); }
+    function goUp() { cwd = cwd.split('/').slice(0,-1).join('/'); load(); }
+
+    async function download(name) {
+        const filePath = (cwd ? cwd + "/" : "") + name;
+
+        const response = await fetch(
+            API_BASE + '/get_file?path=' + encodeURIComponent(filePath)
+        );
+
+        if (!response.ok) {
+            alert('Download failed');
+            return;
+        }
+
+        const blob = await response.blob();
+
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        URL.revokeObjectURL(url);
+    }
+
+    async function upload() {
+      const inp = document.getElementById("fileUpload");        
+      if (!inp.files.length) return;
+      
+      const fd = new FormData(); 
+      fd.append('file', inp.files[0]); 
+      fd.append('path', cwd);
+      
+      const r = await fetch(API_BASE + '/upload', { method: 'POST', body: fd });
+      if (!r.ok) return alert("Upload failed");
+      
+      alert(`${inp.files[0].name} uploaded successfully!`);
+      inp.value = ""; 
+      load();
+    }
+
+    document.getElementById('fileUpload').addEventListener('change', upload);
+
+    async function mkdir() {
+      const n = document.getElementById("newFolderName").value.trim(); 
+      if (!n) return;
+      
+      await fetch(API_BASE + '/mkdir', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ path: cwd, name: n })
+      });
+      
+      alert(`Folder "${n}" created successfully!`);
+      document.getElementById("newFolderName").value = ""; 
+      load();
+    }
+
+    async function touch() {
+      const n = document.getElementById("newFileName").value.trim(); 
+      if (!n) return;
+      
+      await fetch(API_BASE + '/touch', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ path: cwd, name: n })
+      });
+      
+      alert(`File "${n}" created successfully!`);
+      document.getElementById("newFileName").value = ""; 
+      load();
+    }
+
+    async function rm(name, isFolder) {
+      if (!confirm(`Are you sure you want to delete "${name}"?`)) return;
+      
+      const r = await fetch(API_BASE + '/delete', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ path: (cwd?cwd+"/":"")+name, is_folder: isFolder })
+      });
+      
+      if (!r.ok) return r.text().then(alert);
+      alert(`"${name}" has been deleted`);
+      load();
+    }
+
+    async function openEditModal(name) {
+      editPath = (cwd?cwd + "/":"") + name;
+      document.getElementById("editName").textContent = name;
+      
+      const r = await fetch(API_BASE + '/read_file?path=' + encodeURIComponent(editPath));
+      if (!r.ok) return alert("Failed to load file");
+      
+      const data = await r.json();
+      document.getElementById("editArea").value = data.content || "";
+      new bootstrap.Modal('#editModal').show();
+    }
+
+    function closeEditModal() {
+      editPath = "";
+      bootstrap.Modal.getInstance(document.getElementById('editModal'))?.hide();
+    }
+
+    async function saveEdit() {
+      const content = document.getElementById("editArea").value;
+      const r = await fetch(API_BASE + '/write_file', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ path: editPath, content })
+      });
+      
+      if (!r.ok) return alert("Save failed");
+      alert(`Changes to "${editPath}" saved successfully!`);
+      closeEditModal();
+      load();
+    }
+
+
+    async function prepareEmulation(name, isFolder) {
+      const bridge = getBridgeBase();
+      if (!bridge) {
+        openBridgeModal();
+        return;
+      }
+      const itemPath = (cwd ? cwd + "/" : "") + name;
+      pendingEmulation = { path: itemPath, name, isFolder, storageId: null };
+      document.getElementById('emulateItemSummary').innerHTML = `<b>Selected:</b> ${name}<br><span>Checking storage availability...</span>`;
+      document.getElementById('storageOptions').innerHTML = '';
+      document.getElementById('emulateStatus').textContent = '';
+      document.getElementById('confirmEmulateBtn').disabled = true;
+      new bootstrap.Modal('#storageModal').show();
+
+      try {
+        const url = bridge + '/emulation/storage-options?remote_base=' + encodeURIComponent(API_BASE) + '&path=' + encodeURIComponent(itemPath);
+        const r = await fetch(url);
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Unable to check storage');
+        document.getElementById('emulateItemSummary').innerHTML = `<b>Selected:</b> ${data.item.name}<br><b>Size:</b> ${humanSize(data.item.size_bytes)}<br><b>Required free space:</b> ${data.required}`;
+        const opts = data.options || [];
+        if (!opts.length) {
+          document.getElementById('storageOptions').innerHTML = '<div class="alert alert-danger">No storage location available.</div>';
+          return;
+        }
+        document.getElementById('storageOptions').innerHTML = opts.map((o, idx) => `
+          <label class="d-block p-2 mb-2 border rounded ${o.enough ? '' : 'opacity-50'}">
+            <input type="radio" name="storageChoice" value="${o.id}" ${idx === 0 && o.enough ? 'checked' : ''} ${o.enough ? '' : 'disabled'}>
+            <b>${o.label}</b><br>
+            <span class="text-muted">Available: ${o.free}</span>
+            ${o.enough ? '' : '<br><span class="text-danger">Not enough space</span>'}
+          </label>`).join('');
+        document.getElementById('confirmEmulateBtn').disabled = !opts.some(o => o.enough);
+      } catch (e) {
+        document.getElementById('storageOptions').innerHTML = `<div class="alert alert-danger">${e.message}</div>`;
+      }
+    }
+
+    async function confirmEmulation() {
+      const bridge = getBridgeBase();
+      const selected = document.querySelector('input[name="storageChoice"]:checked');
+      if (!pendingEmulation || !selected) return alert('Select a storage location');
+      const btn = document.getElementById('confirmEmulateBtn');
+      btn.disabled = true;
+      document.getElementById('emulateStatus').textContent = 'Downloading selected item and preparing USB emulation...';
+      try {
+        const r = await fetch(bridge + '/emulation/start', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ remote_base: API_BASE, path: pendingEmulation.path, storage_id: selected.value })
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Emulation failed');
+        document.getElementById('emulateStatus').textContent = data.message || 'Emulated successfully.';
+        setTimeout(() => bootstrap.Modal.getInstance(document.getElementById('storageModal'))?.hide(), 1000);
+      } catch (e) {
+        document.getElementById('emulateStatus').innerHTML = `<span class="text-danger">${e.message}</span>`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function revertEmulation() {
+      const bridge = getBridgeBase();
+      if (!bridge) {
+        openBridgeModal();
+        return;
+      }
+      if (!confirm('Revert current USB emulation?')) return;
+      try {
+        const r = await fetch(bridge + '/emulation/revert', { method: 'POST' });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Revert failed');
+        alert(data.message || 'USB emulation reverted.');
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>
+ 
