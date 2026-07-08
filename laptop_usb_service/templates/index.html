@@ -141,10 +141,20 @@
   .table tbody tr:hover td {
    background-color: #333333;
   }
+
+    /* Dark-theme visibility and progress fixes */
+    .modal-body .text-muted, .form-text.text-muted, #emulateItemSummary, #emulateStatus, #storageOptions .text-muted { color: #d6d6d6 !important; }
+    #storageOptions label { background-color: #252525; color: #ffffff; border-color: #555555 !important; }
+    #storageOptions label b, #storageOptions label span { color: #ffffff; }
+    #storageOptions .text-danger { color: #ff6b6b !important; }
+    #emulationBanner { display:none; background:#2a2100; color:#ffd966; border:1px solid #806000; border-radius:8px; padding:10px 14px; margin-bottom:12px; }
+    .emulation-progress-wrap { display:none; margin-top:12px; }
+    .progress { background-color:#333; height:22px; }
   </style>
 </head>
 <body>
   <div class="container">
+    <div id="emulationBanner"><i class="bi bi-exclamation-triangle"></i> A file/folder is already emulated. Revert it before emulating a new item.</div>
     <nav aria-label="breadcrumb"><ol class="breadcrumb" id="breadcrumb"></ol></nav>
     <div class="d-flex mb-3 gap-2 flex-wrap">
       <input type="file" id="fileUpload" class="form-control w-auto d-none">
@@ -215,6 +225,11 @@
         <div class="mb-2">Choose where to store the downloaded copy before USB emulation:</div>
         <div id="storageOptions"></div>
         <div id="emulateStatus" class="mt-3 small text-muted"></div>
+        <div class="emulation-progress-wrap" id="emulationProgressWrap">
+          <div class="progress">
+            <div class="progress-bar progress-bar-striped progress-bar-animated" id="emulationProgressBar" role="progressbar" style="width:0%">0%</div>
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -249,6 +264,7 @@
     let cwd = "", editPath = "";
     const API_BASE = window.location.origin;
     let pendingEmulation = null;
+    let emulationActive = false;
 
     function getBridgeBase() {
       const savedIp = localStorage.getItem('rutomatrixBridgeIp') || '';
@@ -279,6 +295,59 @@
       let i = 0;
       while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
       return i === 0 ? `${n} ${units[i]}` : `${n.toFixed(1)} ${units[i]}`;
+    }
+
+
+    async function refreshEmulationState() {
+      const bridge = getBridgeBase();
+      const banner = document.getElementById('emulationBanner');
+      if (!bridge) {
+        emulationActive = false;
+        if (banner) banner.style.display = 'none';
+        return;
+      }
+      try {
+        const r = await fetch(bridge + '/emulation/status', { cache: 'no-store' });
+        const data = await r.json();
+        emulationActive = !!data.active;
+        if (banner) banner.style.display = emulationActive ? 'block' : 'none';
+        document.querySelectorAll('.emulate-btn').forEach(btn => {
+          btn.disabled = emulationActive;
+          btn.title = emulationActive ? 'Already emulated. Revert before emulating a new item.' : 'Emulate to Target';
+        });
+      } catch (e) {
+        emulationActive = false;
+      }
+    }
+
+    function setProgress(percent, message) {
+      const wrap = document.getElementById('emulationProgressWrap');
+      const bar = document.getElementById('emulationProgressBar');
+      wrap.style.display = 'block';
+      const p = Math.max(0, Math.min(100, Number(percent || 0)));
+      bar.style.width = p + '%';
+      bar.textContent = p + '%';
+      if (message) document.getElementById('emulateStatus').textContent = message;
+    }
+
+    async function pollEmulationJob(jobId) {
+      const bridge = getBridgeBase();
+      while (true) {
+        const r = await fetch(bridge + '/emulation/job/' + encodeURIComponent(jobId), { cache: 'no-store' });
+        const job = await r.json();
+        if (!r.ok) throw new Error(job.error || 'Unable to read emulation progress');
+        setProgress(job.progress || 0, job.message || 'Processing...');
+        if (job.state === 'done') {
+          await refreshEmulationState();
+          document.getElementById('emulateStatus').innerHTML = '<span class="text-success">Emulated successfully. Target server should now detect the USB device.</span>';
+          return;
+        }
+        if (job.state === 'error') {
+          await refreshEmulationState();
+          throw new Error(job.error || job.message || 'Emulation failed');
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
     }
 
     function setBreadcrumb() {
@@ -352,7 +421,7 @@
         actionsTd.innerHTML = `
           <div class="action-buttons">
             ${!f.is_folder ? `<button class="btn btn-sm btn-success" onclick="download('${f.name}')" title="Download"><i class="bi bi-download"></i></button>` : ''}
-            <button class="btn btn-sm btn-primary" onclick="prepareEmulation('${f.name}',${f.is_folder})" title="Emulate to Target"><i class="bi bi-usb-symbol"></i></button>
+            <button class="btn btn-sm btn-primary emulate-btn" onclick="prepareEmulation('${f.name}',${f.is_folder})" title="Emulate to Target"><i class="bi bi-usb-symbol"></i></button>
             ${!f.is_folder && /\.(txt|md|log|py|js|html|css)$/i.test(f.name) ? `<button class="btn btn-sm btn-warning" onclick="openEditModal('${f.name}')" title="Edit"><i class="bi bi-pencil"></i></button>` : ''}
             <button class="btn btn-sm btn-danger" onclick="rm('${f.name}',${f.is_folder})" title="Delete"><i class="bi bi-trash"></i></button>
           </div>`;
@@ -360,6 +429,7 @@
         tr.append(nameTd, actionsTd);
         tb.append(tr);
       });
+      refreshEmulationState();
     }
 
     function cd(path) { cwd = path; load(); }
@@ -488,6 +558,8 @@
 
     async function prepareEmulation(name, isFolder) {
       const bridge = getBridgeBase();
+      await refreshEmulationState();
+      if (emulationActive) { alert('A file/folder is already emulated. Revert it before emulating a new item.'); return; }
       if (!bridge) {
         openBridgeModal();
         return;
@@ -498,6 +570,8 @@
       document.getElementById('storageOptions').innerHTML = '';
       document.getElementById('emulateStatus').textContent = '';
       document.getElementById('confirmEmulateBtn').disabled = true;
+      document.getElementById('emulationProgressWrap').style.display = 'none';
+      setProgress(0, 'Checking selected item and available storage...');
       new bootstrap.Modal('#storageModal').show();
 
       try {
@@ -532,6 +606,7 @@
       btn.disabled = true;
       document.getElementById('emulateStatus').textContent = 'Downloading selected item and preparing USB emulation...';
       try {
+        setProgress(1, 'Starting emulation job...');
         const r = await fetch(bridge + '/emulation/start', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -539,17 +614,19 @@
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || 'Emulation failed');
-        document.getElementById('emulateStatus').textContent = data.message || 'Emulated successfully.';
-        setTimeout(() => bootstrap.Modal.getInstance(document.getElementById('storageModal'))?.hide(), 1000);
+        if (!data.job_id) throw new Error('Bridge did not return a job ID');
+        await pollEmulationJob(data.job_id);
       } catch (e) {
         document.getElementById('emulateStatus').innerHTML = `<span class="text-danger">${e.message}</span>`;
       } finally {
-        btn.disabled = false;
+        btn.disabled = emulationActive;
       }
     }
 
     async function revertEmulation() {
       const bridge = getBridgeBase();
+      await refreshEmulationState();
+      if (emulationActive) { alert('A file/folder is already emulated. Revert it before emulating a new item.'); return; }
       if (!bridge) {
         openBridgeModal();
         return;
@@ -560,12 +637,14 @@
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || 'Revert failed');
         alert(data.message || 'USB emulation reverted.');
+        await refreshEmulationState();
       } catch (e) {
         alert(e.message);
       }
     }
 
     load();
+    setInterval(refreshEmulationState, 5000);
   </script>
 </body>
 </html>
