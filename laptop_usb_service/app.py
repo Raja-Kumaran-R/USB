@@ -401,6 +401,140 @@ def package_item():
         logging.exception("Package item failed")
         return str(e), 500
 
+
+
+@app.route("/items_info", methods=["POST"])
+def items_info():
+    """Return combined metadata for multiple selected files/folders."""
+    try:
+        data = request.get_json(force=True) or {}
+        paths = data.get("paths") or []
+        if not isinstance(paths, list) or not paths:
+            return jsonify({"error": "At least one path is required"}), 400
+
+        items = []
+        total_size = 0
+
+        for raw_path in paths:
+            full_path = _safe_usb_path(str(raw_path))
+            if not os.path.exists(full_path):
+                return jsonify({"error": f"Item not found: {raw_path}"}), 404
+
+            size = _get_size_bytes(full_path)
+            total_size += size
+            rel = str(raw_path).replace('\\', '/').strip('/')
+            items.append({
+                "path": rel,
+                "name": os.path.basename(full_path.rstrip('/\\')),
+                "is_folder": os.path.isdir(full_path),
+                "size_bytes": size
+            })
+
+        return jsonify({
+            "count": len(items),
+            "items": items,
+            "size_bytes": total_size,
+            "display_name": f"{len(items)} selected item(s)"
+        })
+
+    except Exception as e:
+        logging.exception("Items info failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/package_items", methods=["POST"])
+def package_items():
+    """Return multiple selected files/folders as one ZIP package for Rutomatrix."""
+    import tempfile
+    import zipfile
+
+    try:
+        data = request.get_json(force=True) or {}
+        paths = data.get("paths") or []
+        if not isinstance(paths, list) or not paths:
+            return "At least one path is required", 400
+
+        # Normalize and remove duplicates while preserving order.
+        normalized = []
+        seen = set()
+        for raw_path in paths:
+            rel = str(raw_path).replace('\\', '/').strip('/')
+            if not rel or rel in seen:
+                continue
+            seen.add(rel)
+            normalized.append(rel)
+
+        if not normalized:
+            return "No valid paths selected", 400
+
+        tmp = tempfile.NamedTemporaryFile(prefix="rutomatrix_multi_pkg_", suffix=".zip", delete=False)
+        tmp.close()
+
+        added_arcs = set()
+
+        def unique_arcname(arcname):
+            arcname = arcname.replace('\\', '/').strip('/')
+            if not arcname:
+                arcname = "usb_item"
+            if arcname not in added_arcs:
+                added_arcs.add(arcname)
+                return arcname
+            base, ext = os.path.splitext(arcname)
+            idx = 2
+            while True:
+                candidate = f"{base}_{idx}{ext}"
+                if candidate not in added_arcs:
+                    added_arcs.add(candidate)
+                    return candidate
+                idx += 1
+
+        with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
+            for rel in normalized:
+                full_path = _safe_usb_path(rel)
+                if not os.path.exists(full_path):
+                    return f"Item not found: {rel}", 404
+
+                if os.path.isfile(full_path):
+                    zf.write(full_path, arcname=unique_arcname(rel))
+                else:
+                    # Preserve the selected folder path relative to USB root.
+                    folder_root_name = rel.rstrip('/').replace('\\', '/')
+                    dir_arc = unique_arcname(folder_root_name + '/')
+                    zf.writestr(dir_arc.rstrip('/') + '/', '')
+
+                    root_parent = os.path.dirname(full_path)
+                    for root_dir, _, files in os.walk(full_path):
+                        rel_dir = os.path.relpath(root_dir, root_parent).replace('\\', '/')
+                        if rel_dir != ".":
+                            dir_name = rel_dir.rstrip('/') + '/'
+                            if dir_name not in added_arcs:
+                                added_arcs.add(dir_name)
+                                zf.writestr(dir_name, '')
+
+                        for fname in files:
+                            fp = os.path.join(root_dir, fname)
+                            arc = os.path.relpath(fp, root_parent).replace('\\', '/')
+                            zf.write(fp, arcname=unique_arcname(arc))
+
+        @after_this_request
+        def cleanup(response):
+            try:
+                os.remove(tmp.name)
+            except OSError:
+                pass
+            return response
+
+        return send_file(
+            tmp.name,
+            as_attachment=True,
+            download_name="rutomatrix_selected_items.zip",
+            mimetype="application/zip"
+        )
+
+    except Exception as e:
+        logging.exception("Package items failed")
+        return str(e), 500
+
 # =====================================================
 # Main
 # =====================================================

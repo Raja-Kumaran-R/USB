@@ -175,6 +175,10 @@
       min-width: 90px;
     }
     .cache-delete-btn:hover { background: #bb2d3b; }
+
+    .selection-panel { background:#1f2a1f; border:1px solid #3d6b3d; color:#d6ffd6; border-radius:8px; padding:8px 12px; margin-bottom:12px; display:none; }
+    .selection-checkbox { width:18px; height:18px; cursor:pointer; }
+    .selected-path-list { max-height:120px; overflow-y:auto; font-size:12px; color:#d6d6d6; margin-top:6px; display:none; }
   </style>
 </head>
 <body>
@@ -185,6 +189,9 @@
       <input type="file" id="fileUpload" class="form-control w-auto d-none">
       <button class="btn btn-primary" onclick="document.getElementById('fileUpload').click()">
         <i class="bi bi-upload"></i> Upload
+      </button>
+      <button class="btn btn-secondary" onclick="goBack()" id="backBtn" disabled>
+        <i class="bi bi-arrow-left"></i> Back
       </button>
       <button class="btn btn-secondary" onclick="goUp()">
         <i class="bi bi-arrow-up"></i> Up
@@ -204,9 +211,25 @@
         <i class="bi bi-hdd-network"></i> Bridge IP
       </button>
     </div>
+    <div id="selectionPanel" class="selection-panel">
+      <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap">
+        <div>
+          <b id="selectedCountLabel">0 item(s) selected</b>
+          <button class="btn btn-sm btn-link text-light" onclick="toggleSelectedPathList()" type="button">Show/Hide list</button>
+        </div>
+        <div class="d-flex gap-2 flex-wrap">
+          <button class="btn btn-sm btn-primary" onclick="prepareSelectedEmulation()" id="emulateSelectedBtn">
+            <i class="bi bi-usb-symbol"></i> Emulate Selected
+          </button>
+          <button class="btn btn-sm btn-outline-light" onclick="clearSelectedItems()">Clear Selection</button>
+        </div>
+      </div>
+      <div id="selectedPathList" class="selected-path-list"></div>
+    </div>
     <table class="table table-hover">        
       <thead>
         <tr>
+          <th style="width:55px">Select</th>
           <th><i class="bi bi-folder-fill"></i> Name</th>
           <th style="width:360px"><i class="bi bi-gear-fill"></i> Actions</th>
         </tr>
@@ -242,7 +265,7 @@
   <div class="modal fade" id="storageModal" tabindex="-1">
     <div class="modal-dialog"><div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title">Emulate Selected Item</h5>
+        <h5 class="modal-title">Emulate Selected Item(s)</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -315,6 +338,8 @@
     const API_BASE = window.location.origin;
     let pendingEmulation = null;
     let emulationActive = false;
+    let selectedItems = new Map();
+    let navHistory = [];
 
     function getBridgeBase() {
       const savedIp = localStorage.getItem('rutomatrixBridgeIp') || '';
@@ -345,6 +370,65 @@
       let i = 0;
       while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
       return i === 0 ? `${n} ${units[i]}` : `${n.toFixed(1)} ${units[i]}`;
+    }
+
+
+    function normalizePath(path) {
+      return String(path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    }
+
+    function itemFullPath(name) {
+      return normalizePath((cwd ? cwd + '/' : '') + name);
+    }
+
+    function updateSelectedSummary() {
+      const panel = document.getElementById('selectionPanel');
+      const label = document.getElementById('selectedCountLabel');
+      const list = document.getElementById('selectedPathList');
+      const count = selectedItems.size;
+
+      if (panel) panel.style.display = count > 0 ? 'block' : 'none';
+      if (label) label.textContent = `${count} item(s) selected`;
+      if (list) {
+        list.innerHTML = Array.from(selectedItems.values()).map(item => {
+          const icon = item.isFolder ? '📁' : '📄';
+          return `<div>${icon} ${escapeHtml(item.path)}</div>`;
+        }).join('');
+      }
+
+      document.querySelectorAll('.selection-checkbox').forEach(cb => {
+        cb.checked = selectedItems.has(cb.dataset.path);
+      });
+    }
+
+    function toggleSelectedPathList() {
+      const list = document.getElementById('selectedPathList');
+      if (!list) return;
+      list.style.display = list.style.display === 'block' ? 'none' : 'block';
+    }
+
+    function toggleItemSelection(name, isFolder, checked) {
+      const path = itemFullPath(name);
+      if (checked) {
+        selectedItems.set(path, { path, name, isFolder });
+      } else {
+        selectedItems.delete(path);
+      }
+      updateSelectedSummary();
+    }
+
+    function clearSelectedItems() {
+      selectedItems.clear();
+      updateSelectedSummary();
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
     }
 
 
@@ -404,13 +488,13 @@
       const bc = document.getElementById("breadcrumb");
       bc.innerHTML = '';
       const parts = cwd.split("/").filter(x => x);
-      bc.innerHTML = `<li class="breadcrumb-item"><a href="#" onclick="cd('')"><i class="bi bi-usb-drive"></i> USB</a></li>`;
+      bc.innerHTML = `<li class="breadcrumb-item"><a href="#" onclick="navigateTo('', true)"><i class="bi bi-usb-drive"></i> USB</a></li>`;
       let acc = "";
       parts.forEach((p, i) => {
         acc += (i > 0 ? '/' : '') + p;
         bc.innerHTML += `
           <li class="breadcrumb-item${i===parts.length-1?' active':''}"${i===parts.length-1?' aria-current="page"':''}>
-            ${i===parts.length-1?p:`<a href="#" onclick="cd('${acc}')"><i class="bi bi-folder"></i> ${p}</a>`}
+            ${i===parts.length-1?p:`<a href="#" onclick="navigateTo('${acc}', true)"><i class="bi bi-folder"></i> ${p}</a>`}
           </li>`;
       });
     }
@@ -455,35 +539,70 @@
       tb.innerHTML = "";
       files.sort((a,b) => a.is_folder === b.is_folder ? a.name.localeCompare(b.name) : a.is_folder ? -1 : 1);
       files.forEach(f => {
+        const fullPath = itemFullPath(f.name);
         const tr = document.createElement("tr");
+
+        const selectTd = document.createElement("td");
+        selectTd.innerHTML = `
+          <input type="checkbox"
+                 class="selection-checkbox"
+                 data-path="${escapeHtml(fullPath)}"
+                 ${selectedItems.has(fullPath) ? 'checked' : ''}
+                 onchange="toggleItemSelection('${String(f.name).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}', ${f.is_folder}, this.checked)">
+        `;
+
         const nameTd = document.createElement("td");
         nameTd.innerHTML = f.is_folder
             ? `<div class="file-item">
-                    <span class="folder-link" onclick="cd('${f.name}')">
-                    ${getFileIcon(f.name, true)} ${f.name}
+                    <span class="folder-link" onclick="cd('${String(f.name).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')">
+                    ${getFileIcon(f.name, true)} ${escapeHtml(f.name)}
                     </span>
                 </div>`
             : `<div class="file-item">
-                    ${getFileIcon(f.name, false)} ${f.name}
+                    ${getFileIcon(f.name, false)} ${escapeHtml(f.name)}
                 </div>`;
         
         const actionsTd = document.createElement("td");
         actionsTd.innerHTML = `
           <div class="action-buttons">
-            ${!f.is_folder ? `<button class="btn btn-sm btn-success" onclick="download('${f.name}')" title="Download"><i class="bi bi-download"></i></button>` : ''}
-            <button class="btn btn-sm btn-primary emulate-btn" onclick="prepareEmulation('${f.name}',${f.is_folder})" title="Emulate to Target"><i class="bi bi-usb-symbol"></i></button>
-            ${!f.is_folder && /\.(txt|md|log|py|js|html|css)$/i.test(f.name) ? `<button class="btn btn-sm btn-warning" onclick="openEditModal('${f.name}')" title="Edit"><i class="bi bi-pencil"></i></button>` : ''}
-            <button class="btn btn-sm btn-danger" onclick="rm('${f.name}',${f.is_folder})" title="Delete"><i class="bi bi-trash"></i></button>
+            ${!f.is_folder ? `<button class="btn btn-sm btn-success" onclick="download('${String(f.name).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')" title="Download"><i class="bi bi-download"></i></button>` : ''}
+            <button class="btn btn-sm btn-primary" onclick="selectOnlyAndPrepare('${String(f.name).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}',${f.is_folder})" title="Emulate only this item"><i class="bi bi-usb-symbol"></i></button>
+            ${!f.is_folder && /\.(txt|md|log|py|js|html|css)$/i.test(f.name) ? `<button class="btn btn-sm btn-warning" onclick="openEditModal('${String(f.name).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')" title="Edit"><i class="bi bi-pencil"></i></button>` : ''}
+            <button class="btn btn-sm btn-danger" onclick="rm('${String(f.name).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}',${f.is_folder})" title="Delete"><i class="bi bi-trash"></i></button>
           </div>`;
         
-        tr.append(nameTd, actionsTd);
+        tr.append(selectTd, nameTd, actionsTd);
         tb.append(tr);
       });
+      updateSelectedSummary();
       refreshEmulationState();
     }
 
-    function cd(path) { cwd = path; load(); }
-    function goUp() { cwd = cwd.split('/').slice(0,-1).join('/'); load(); }
+    function navigateTo(path, pushHistory = true) {
+      const next = normalizePath(path);
+      if (pushHistory && next !== cwd) {
+        navHistory.push(cwd);
+      }
+      cwd = next;
+      document.getElementById('backBtn').disabled = navHistory.length === 0;
+      load();
+    }
+
+    function cd(path) {
+      navigateTo(cwd ? cwd + '/' + path : path, true);
+    }
+
+    function goUp() {
+      if (!cwd) return;
+      navigateTo(cwd.split('/').slice(0,-1).join('/'), true);
+    }
+
+    function goBack() {
+      if (!navHistory.length) return;
+      cwd = navHistory.pop();
+      document.getElementById('backBtn').disabled = navHistory.length === 0;
+      load();
+    }
 
     async function download(name) {
         const filePath = (cwd ? cwd + "/" : "") + name;
@@ -606,28 +725,55 @@
     }
 
 
-    async function prepareEmulation(name, isFolder) {
+    async function selectOnlyAndPrepare(name, isFolder) {
+      selectedItems.clear();
+      toggleItemSelection(name, isFolder, true);
+      await prepareSelectedEmulation();
+    }
+
+    async function prepareSelectedEmulation() {
       const bridge = getBridgeBase();
       if (!bridge) {
         openBridgeModal();
         return;
       }
-      const itemPath = (cwd ? cwd + "/" : "") + name;
-      pendingEmulation = { path: itemPath, name, isFolder, storageId: null };
-      document.getElementById('emulateItemSummary').innerHTML = `<b>Selected:</b> ${name}<br><span>Checking storage availability...</span>`;
+      if (selectedItems.size < 1) {
+        alert('Select at least one file or folder to emulate.');
+        return;
+      }
+      if (emulationActive) {
+        alert('A file/folder is already emulated. Revert it before emulating a new item.');
+        return;
+      }
+
+      const paths = Array.from(selectedItems.keys());
+      pendingEmulation = { paths, count: paths.length, storageId: null };
+      document.getElementById('emulateItemSummary').innerHTML = `<b>Selected:</b> ${paths.length} item(s)<br><span>Checking storage availability...</span>`;
       document.getElementById('storageOptions').innerHTML = '';
       document.getElementById('emulateStatus').textContent = '';
       document.getElementById('confirmEmulateBtn').disabled = true;
       document.getElementById('emulationProgressWrap').style.display = 'none';
-      setProgress(0, 'Checking selected item and available storage...');
+      setProgress(0, 'Checking selected item(s) and available storage...');
       new bootstrap.Modal('#storageModal').show();
 
       try {
-        const url = bridge + '/emulation/storage-options?remote_base=' + encodeURIComponent(API_BASE) + '&path=' + encodeURIComponent(itemPath);
-        const r = await fetch(url);
+        const r = await fetch(bridge + '/emulation/storage-options', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ remote_base: API_BASE, paths })
+        });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || 'Unable to check storage');
-        document.getElementById('emulateItemSummary').innerHTML = `<b>Selected:</b> ${data.item.name}<br><b>Size:</b> ${humanSize(data.item.size_bytes)}<br><b>Required free space:</b> ${data.required}`;
+
+        const itemInfo = data.item || {};
+        const listPreview = paths.slice(0, 6).map(p => `• ${escapeHtml(p)}`).join('<br>');
+        const moreText = paths.length > 6 ? `<br>...and ${paths.length - 6} more` : '';
+        document.getElementById('emulateItemSummary').innerHTML =
+          `<b>Selected:</b> ${paths.length} item(s)<br>` +
+          `<b>Total size:</b> ${humanSize(itemInfo.size_bytes)}<br>` +
+          `<b>Required free space:</b> ${data.required}<br>` +
+          `<div class="mt-2 small">${listPreview}${moreText}</div>`;
+
         const opts = data.options || [];
         if (!opts.length) {
           document.getElementById('storageOptions').innerHTML = '<div class="alert alert-danger">No storage location available.</div>';
@@ -646,19 +792,23 @@
       }
     }
 
+    async function prepareEmulation(name, isFolder) {
+      await selectOnlyAndPrepare(name, isFolder);
+    }
+
     async function confirmEmulation() {
       const bridge = getBridgeBase();
       const selected = document.querySelector('input[name="storageChoice"]:checked');
       if (!pendingEmulation || !selected) return alert('Select a storage location');
       const btn = document.getElementById('confirmEmulateBtn');
       btn.disabled = true;
-      document.getElementById('emulateStatus').textContent = 'Downloading selected item and preparing USB emulation...';
+      document.getElementById('emulateStatus').textContent = 'Downloading selected item(s) and preparing USB emulation...';
       try {
         setProgress(1, 'Starting emulation job...');
         const r = await fetch(bridge + '/emulation/start', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ remote_base: API_BASE, path: pendingEmulation.path, storage_id: selected.value })
+          body: JSON.stringify({ remote_base: API_BASE, paths: pendingEmulation.paths, storage_id: selected.value })
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || 'Emulation failed');
